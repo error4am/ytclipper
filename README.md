@@ -1,242 +1,334 @@
 # ytclipper
 
-Watches a YouTube live stream and cuts clips **while it is still streaming**.
+**Clip a YouTube live stream while it is still streaming.**
 
-It records the stream into a rolling on-disk buffer, listens for hype (loud
-moments in the audio, spikes in live chat), and when something happens it saves
-a real `.mp4` with the seconds *before* and *after* the moment — the part you
-would otherwise have missed. Captions are transcribed locally and burned into
-the clip, with an `.srt` saved next to it.
+It records the stream into a rolling buffer, watches for hype (loud moments, chat
+spikes), and saves ready-to-post `.mp4` clips that include the seconds *before*
+the moment — the part you would otherwise have missed. Captions are transcribed
+locally, and any clip can be exported as vertical 9:16 for Shorts, Reels or
+TikTok.
 
-You can also just smash the big **CLIP THAT** button (or press space) whenever
-you see something good, and it will still include the last N seconds.
-
-```
-python clipper.py "https://www.youtube.com/watch?v=XXXXXXXXXXX"
-```
-
-then open <http://127.0.0.1:8765>.
+Everything runs on your machine. No API keys, no uploads, no cloud.
 
 ---
 
-## Requirements
+## Contents
 
-| Tool | Why | Check |
-| --- | --- | --- |
-| Python 3.10+ | runs the clipper | `python --version` |
-| ffmpeg + ffprobe | records & encodes | `ffmpeg -version` |
-| yt-dlp | resolves YouTube streams | `python -m yt_dlp --version` |
-| faster-whisper | auto captions | `python -c "import faster_whisper"` |
+- [What it does](#what-it-does)
+- [Install](#install)
+- [Quick start](#quick-start)
+- [Using the dashboard](#using-the-dashboard)
+- [What you get on disk](#what-you-get-on-disk)
+- [How it works](#how-it-works)
+- [Auto clipping & tuning](#auto-clipping--tuning)
+- [Captions](#captions)
+- [Vertical clips (9:16)](#vertical-clips-916)
+- [Speed: hardware encoding](#speed-hardware-encoding)
+- [Live preview](#live-preview)
+- [Normal videos (non-live)](#normal-videos-non-live)
+- [Going online (security)](#going-online-security)
+- [CLI reference](#cli-reference)
+- [Troubleshooting](#troubleshooting)
+- [Project layout](#project-layout)
+- [Limits](#limits)
+- [License](#license)
 
-Install the Python bits:
+---
+
+## What it does
+
+| | |
+| --- | --- |
+| **Rolling buffer** | Keeps the last 7 minutes of stream on disk as small segments, so a clip can reach backwards in time. |
+| **Auto clipping** | Cuts a clip when the audio jumps well above its rolling baseline, or when live chat rate spikes. |
+| **Manual clipping** | The big button, `space` in the dashboard, or **F8 from any window** (works over fullscreen games). |
+| **Captions** | Local Whisper transcription, burned in and saved as `.srt`. |
+| **9:16 export** | One click per clip: blurred-background or full-bleed vertical 1080×1920. |
+| **Hardware encoding** | Picks NVENC / Quick Sync / AMF automatically, falls back to CPU. |
+| **Live preview** | See the stream inside the dashboard while you clip. |
+| **Hardened dashboard** | Password login, SSRF guard, CSRF/host checks, TLS, attack test suite. |
+
+---
+
+## Install
+
+### 1. Python packages
 
 ```powershell
 python -m pip install -U yt-dlp faster-whisper
 ```
 
-ffmpeg on Windows:
+Optional:
+
+```powershell
+python -m pip install kokoro-onnx      # nicer voice for the --test demo stream
+python -m pip install chat-downloader  # chat-spike detection
+```
+
+### 2. ffmpeg
+
+Windows:
 
 ```powershell
 winget install Gyan.FFmpeg
 ```
 
-(If ffmpeg is not on `PATH`, pass `--ffmpeg "C:\path\to\ffmpeg.exe"`.)
+Any platform: make sure both `ffmpeg` and `ffprobe` are on `PATH`, or pass
+`--ffmpeg "C:\path\to\ffmpeg.exe"`.
 
-Optional — live chat detection:
+### 3. Check
 
 ```powershell
-python -m pip install chat-downloader
+ffmpeg -version
+python -m yt_dlp --version
 ```
 
-Without it everything still works, audio detection just has no chat signal.
+**First run** downloads models once: Whisper `base` (~145 MB) for captions, and
+Kokoro (~340 MB) only if you use the demo stream.
 
 ---
 
 ## Quick start
 
 ```powershell
-cd C:\Users\HP\clipper
+cd path\to\clipper
 
-# open the dashboard, then paste a stream URL into the bar at the top
+# 1. open the dashboard, then paste a URL into the bar at the top
 python clipper.py
 
-# or start watching straight away (the URL bar fills itself in)
+# 2. or start watching immediately
 python clipper.py "https://www.youtube.com/watch?v=XXXXXXXXXXX"
-
-# a channel that is live right now
-python clipper.py "https://www.youtube.com/@somechannel/live"
-
-# private / age-restricted stream
-python clipper.py "https://www.youtube.com/watch?v=XXX" --cookies-from-browser chrome
-
-# just resolve it and print the stream info, no recording
-python clipper.py "https://www.youtube.com/watch?v=XXX" --check
 ```
 
-The dashboard opens automatically. Clips are written to `.\clips\`.
+Double-clicking **`run.bat`** does the same as option 1 — no console prompt.
 
-`run.bat` no longer asks for anything — it opens the dashboard and you paste the
-URL there. You can still drag a URL onto it, or run `run.bat "URL"` to skip a
-step.
-
----
-
-## Test it in one command
-
-No live stream around? Run the built-in demo:
+### Try it without a live stream
 
 ```powershell
 python clipper.py --test
 ```
 
-That starts a **local fake live stream** (test pattern + spoken lines using your
-Windows voice, with a loud burst every ~16 seconds), serves it over localhost,
-and points the normal pipeline at it. Nothing touches YouTube.
+That builds a fake live stream locally (spoken lines + a loud burst every ~16s),
+so you can test clipping, captions, the hotkey and 9:16 in about a minute. It
+cleans itself up on Ctrl+C. `demo.bat` does the same by double-click.
 
-Within a minute you should see this in the activity log:
-
-```
-demo stream live at http://127.0.0.1:8901/demo.m3u8 (a loud burst every ~16s)
-caption model 'base' ready (4s, cpu/int8)
-queued clip [audio] 10s (ready in ~2s)
-transcribed 10s -> 5 caption cues (4.1s, en)
-saved clip_..._audio.mp4  10.0s  3.6MB +captions
-```
-
-and a captioned clip in the grid.
-
-Things worth trying in that session:
-
-| Try this | What it proves |
-| --- | --- |
-| watch the loudness meter when the burst hits | audio detection + trigger line |
-| press **space** / **CLIP THAT** | manual clip with a look-back |
-| press **F8** from another window | the global hotkey clips without focusing the dashboard |
-| toggle **captions** off, cut another clip | burn-in vs clean video |
-| click `play` on a card | in-browser playback (range requests) |
-| click `srt` | subtitle sidecar download |
-| `open folder`, `delete` | file management |
-
-Stop with `Ctrl+C` (or double-click `demo.bat` and close it) — the fake stream
-and its temp files are removed automatically. Demo clips stay in `.\clips`.
-
-### Demo voice
-
-The fake stream speaks with **Kokoro**, a small local neural TTS (82M params,
-onnxruntime) that sounds far more natural than the Windows voice. It only
-affects the demo — your real clips keep their original audio.
+### Check a URL before committing
 
 ```powershell
-python clipper.py --test                                # default: af_heart
-python clipper.py --test --voice-name am_michael         # calm male, "presenter"
-python clipper.py --test --voice-name bm_george --voice-speed 0.95
-python clipper.py --test --voice sapi                    # old Windows voice
-python clipper.py --test --voice tone                    # just a beep (no speech)
+python clipper.py "https://www.youtube.com/watch?v=XXXXXXXXXXX" --check
 ```
 
-First run downloads the model once (~230 MB) into `.models\kokoro`. If the
-download or the model fails, the demo falls back to the Windows voice and then
-to a tone; the activity log always says which voice it used.
-
-Voices: `af_heart` (default, warm), `af_bella`, `af_nicole`, `am_michael`,
-`am_adam`, `bf_emma`, `bm_george` — plus everything else in Kokoro v1.0.
+Prints the title, live status and how many media inputs were found.
 
 ---
 
-## What the dashboard gives you
+## Using the dashboard
 
-* **LIVE preview** — the stream itself, right above the controls, so you can see
-  what you're clipping instead of guessing. Muted by default with an unmute
-  button. It's a local re-stream (see below), roughly 4–8 seconds behind live.
-* **URL bar** — paste a YouTube live URL (or any `.m3u8` with `--direct`) and
-  hit **watch**. It resolves and starts recording in a few seconds, and the bar
-  pre-fills with the last URL you used. **stop** ends the recording without
-  closing the app; pasting a different URL switches streams. The **cookies**
-  dropdown pulls cookies from chrome/edge/firefox/… for members-only or
-  age-restricted streams (close that browser if the lookup fails).
-* **demo** — starts the local synthetic stream (speech + loud bursts) so you can
-  try everything without leaving the dashboard.
-* **CLIP THAT** — saves `--before` seconds before the click and `--after`
-  seconds after it. Press **space** or **c** instead of clicking.
-* **F8 anywhere** — a system-wide hotkey clips whatever is on screen, even from
-  a fullscreen game. Change it with `--hotkey ctrl+alt+c` or `--no-hotkey`.
-* **9:16 button** — renders a vertical Shorts/TikTok version of any clip
-  (`blur` keeps the whole frame over a blurred fill; `crop` goes full-bleed).
-* **auto detect** — toggle live. When on, loud moments and chat spikes create
-  clips on their own (with a cooldown so you don't get 40 clips a minute).
-* **captions** — toggle live. Each clip gets its speech transcribed and burned
-  in as subtitles; an `.srt` is saved too. Cards with captions show a `CC` tag.
-* **loudness meter** — current audio level, the rolling baseline, and the
-  level that will fire a clip. Useful for tuning.
-* **clip grid** — thumbnails, duration, why it was cut, inline player,
-  download, delete, `.srt` and `9:16` downloads.
-* **activity log** — what the recorder, the detectors and the encoder are doing.
+Open <http://127.0.0.1:8765> (it opens automatically).
+
+### 1. Start watching
+
+Paste a YouTube live URL into the bar and press **Enter** or **watch**. The
+resolver takes a few seconds; the status line goes `starting → recording`.
+
+- **cookies** dropdown — pick `chrome` / `edge` / `firefox` for members-only or
+  age-restricted streams. Close that browser if the lookup fails.
+- the bar remembers your last URL and cookie choice.
+- **stop** ends recording without closing the app; pasting another URL switches
+  streams.
+- **demo** starts the local fake stream.
+
+### 2. Clip
+
+- **CLIP THAT** saves 18s before and 12s after the click (editable in the
+  `before` / `after` boxes).
+- **space** or **c** does the same.
+- **F8** works globally, even when a game has focus. Change it with
+  `--hotkey ctrl+alt+c`, disable with `--no-hotkey`.
+- **auto detect** toggle — pause automatic clipping at any time.
+
+Clips appear in the grid after the trailing seconds are recorded and encoded
+(usually 10–30s).
+
+### 3. Read the meter
+
+The "room loudness" bar shows the current audio level, the rolling baseline
+(violet), and the level that fires a clip (white). If the white line sits above
+every peak, nothing will ever trigger — lower `--db-margin`.
+
+### 4. Captions and 9:16
+
+- clips with subtitles show a green **CC** tag and offer an `srt` download
+- the **captions** switch turns transcription on/off live
+- **9:16** on a card renders a vertical version; when ready the card shows a
+  portrait preview with play/download
+
+### 5. Activity log
+
+The right column shows what the recorder, detectors, transcriber and encoder are
+doing, including today's encoder choice and any stream errors.
+
+---
+
+## What you get on disk
+
+Everything lands in `clips\` (change with `--out`):
+
+```
+clips\
+  clip_20261117_033325_manual.mp4          the clip, H.264/AAC, ready to post
+  clip_20261117_033325_manual.jpg          thumbnail
+  clip_20261117_033325_manual.srt          subtitles (if transcribed)
+  clip_20261117_033325_manual.json         metadata: reason, duration, stream, language
+  clip_20261117_033325_manual_vertical.mp4 9:16 version, if exported
+  clip_20261117_033325_manual_vertical.jpg
+  clip_20261117_033325_manual_vertical.json
+```
+
+Names are `clip_<date>_<time>_<reason>.mp4` where reason is `manual`, `audio`
+(loud moment) or `chat` (chat spike). Deleting a clip also deletes its vertical.
 
 ---
 
 ## How it works
 
 ```
-YouTube ──yt-dlp──> direct stream URL
+YouTube ──yt-dlp──> direct media URLs
      │
      └─ ffmpeg ─> buffer\seg_sNN_YYYYmmdd_HHMMSS.mkv   (4s segments, rolling)
                         │
                         ├─ audio RMS per 0.5s ──> jump vs 90s baseline ─┐
                         ├─ live chat rate     ──> jump vs 2min baseline ─┤
-                        └─ dashboard button   ─────────────────────────┤
+                        └─ dashboard / F8     ─────────────────────────┤
                                                                        ▼
-                                              wait for the trailing seconds
+                                             wait for the trailing seconds
                                                                        │
-                     stitch -> transcribe -> burn subtitles -> H.264 .mp4 (+ .srt)
+                      stitch -> transcribe -> burn subtitles -> H.264 .mp4 (+ .srt)
 ```
 
-* **Buffer** — segments are written with `-c copy` (no CPU cost, original
-  quality). Only the last `--buffer` seconds are kept, so disk use stays flat.
-* **Detection timing** — audio is analysed per finished segment, and the
-  trigger time comes from that segment's position on the stream timeline, so
-  the clip is aligned to what you actually heard. Expect a few seconds of
-  latency.
-* **Clips** — the selected segments are concatenated losslessly, then trimmed
-  frame-accurately and re-encoded to H.264/AAC MP4 (`+faststart`, ready for
-  uploading or editing). Detection still runs while a clip encodes.
-* **Long streams** — the stream URL is re-resolved every `--refresh` seconds
-  and the recorder auto-reconnects if the connection drops. The web UI and
-  buffer survive restarts.
-* **Nothing is uploaded.** Everything stays on your machine.
+* Segments are written with `-c copy`, so recording costs almost no CPU and
+  keeps the original quality.
+* Only the last `--buffer` seconds are kept, so disk use stays flat.
+* Detection reads the finished segments, so trigger times line up exactly with
+  what you heard. Expect a few seconds of latency.
+* The stream URL is re-resolved hourly and the recorder reconnects if it drops.
+
+---
+
+## Auto clipping & tuning
+
+Two independent triggers:
+
+1. **Audio hype** — a 0.5s window that is `--db-margin` dB above the median of
+   the last 90s, and louder than `--floor-db`.
+2. **Chat hype** — message rate above 3× its rolling baseline (needs
+   `chat-downloader`).
+
+Guard rails: `--cooldown` seconds between automatic clips (default 45) and
+`--max-per-hour` (default 40).
+
+| Symptom | Fix |
+| --- | --- |
+| Too many clips | raise `--db-margin` (12) or `--cooldown` (90) |
+| Missing moments | lower `--db-margin` (6) or `--floor-db` (-45) |
+| Nothing ever fires | watch the meter; lower the margin until the white line sits under the peaks |
+| Want faster reaction | `--seg-time 2` |
+
+---
+
+## Captions
+
+Local [faster-whisper](https://github.com/SYSTRAN/faster-whisper) — no API key,
+nothing uploaded.
+
+```powershell
+python clipper.py "<url>" --caption-model small --caption-lang en
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--caption-model` | `tiny`, `base` (default), `small`, `medium` |
+| `--caption-lang` | force a language, e.g. `en`, `ur`, `es` |
+| `--caption-mode srt` | keep the video clean, write only the `.srt` |
+| `--caption-box` | solid background instead of an outline |
+| `--caption-device cuda --caption-compute float16` | NVIDIA GPU |
+| `--no-captions` | turn transcription off |
+
+Captions cost roughly 0.5× the clip length on CPU with `base` (a 30s clip takes
+~15s). If transcription or burning fails, the clip is still saved without them.
+
+Note: subtitles are transcribed **in the spoken language**. `--caption-lang en`
+on Urdu audio does not translate it, it mis-transcribes it. Translation is not
+included.
+
+---
+
+## Vertical clips (9:16)
+
+```powershell
+# click 9:16 on any card, or:
+python clipper.py "<url>" --vertical-auto             # every clip, blurred fill
+python clipper.py "<url>" --vertical-mode crop        # full-bleed, cuts the sides
+```
+
+- `blur` (default) keeps the whole 16:9 frame centred over a blurred copy of
+  itself — nothing is cropped, captions stay readable.
+- `crop` fills 1080×1920 and loses the left/right edges, which can clip
+  burned-in subtitles.
+- Audio is copied, not re-encoded.
+
+---
+
+## Speed: hardware encoding
+
+At startup the clipper proves each hardware encoder with a one-second test
+encode (ffmpeg often advertises encoders the driver cannot run) and uses the
+fastest that works:
+
+```
+encoder: h264_qsv (Intel Quick Sync) [hardware]
+```
+
+Measured on a 1080×1920 clip: **11.6s with libx264 vs 6.9s with Quick Sync**.
+Force one with `--encoder nvenc|qsv|amf|x264`; if a GPU encode fails mid-clip,
+it retries on CPU automatically.
 
 ---
 
 ## Live preview
 
-The dashboard shows the stream in a panel above the controls. Browsers can't
-play YouTube's HLS directly (cross-origin, expiring URLs, split video/audio),
-so the clipper remuxes the feed into local 1-second HLS segments with ffmpeg and
-serves them from the dashboard itself; `hls.js` plays them.
+The panel above the controls shows the stream itself. Browsers cannot play
+YouTube's feed directly, so the clipper remuxes it into local 1-second HLS
+segments and serves them from the dashboard (`hls.js` plays them).
 
-* **`-c copy`** when the source is H.264/AAC — about **3% of one CPU core** and
-  no re-encoding, so the preview is pixel-identical to what you record.
-* **Fallback transcode** to 540p if the source is VP9/AV1 or copy fails.
-* Costs one extra download of the stream (a few Mbps). Disable it with
-  `--no-preview` if bandwidth or CPU is tight.
-* Starts and stops with the stream, and resets itself when you switch URLs.
-* Audio is muted by default (browser autoplay rules); hit **unmute** when you
-  want sound.
+- `-c copy` when the source is H.264/AAC: ~3% of one CPU core, no re-encode.
+- automatic 540p transcode for AV1/VP9 sources.
+- about 4–8 seconds behind live. Muted by default; hit **unmute**.
+- costs one extra download of the stream — disable with `--no-preview`.
+
+---
+
+## Normal videos (non-live)
+
+A regular YouTube video works, but it is treated like a live stream: it plays at
+**1× real time**, buffers the last 7 minutes, and stops when the video ends.
+There is no seeking or fast scanning — for long archives, let it run or clip
+from the parts you watch.
+
+---
 
 ## Going online (security)
 
-By default the dashboard binds to **127.0.0.1** and has no login — that is fine
-for your own machine. The moment it listens on another interface, a password is
-**required** (the app refuses to start without one):
+By default the dashboard binds to **127.0.0.1** with no login. If you listen on
+another interface, a password is **mandatory** — the app refuses to start
+without one:
 
 ```powershell
 # LAN / internet, password generated and printed once
 python clipper.py --host 0.0.0.0 --generate-password
 
-# or pick your own
-python clipper.py --host 0.0.0.0 --password "something-long"
-
-# behind a domain/reverse proxy, add the hostname to the allowlist
-python clipper.py --host 0.0.0.0 --password "..." --allowed-host clips.mydomain.com
+# your own password, plus the hostname if you use a domain
+python clipper.py --host 0.0.0.0 --password "something-long" --allowed-host clips.mydomain.com
 
 # serve HTTPS directly
 python clipper.py --host 0.0.0.0 --password "..." --tls-cert cert.pem --tls-key key.pem
@@ -244,222 +336,193 @@ python clipper.py --host 0.0.0.0 --password "..." --tls-cert cert.pem --tls-key 
 
 What is enforced:
 
-* **Password login** (PBKDF2-SHA256, 200k rounds) with an HttpOnly,
-  SameSite=Strict session cookie, `Secure` when TLS is on.
-* **Brute-force lockout** — 8 failed attempts per IP in 10 minutes, then 429.
-* **Host header validation** — IP literals are fine, unknown hostnames are 421,
-  which blocks DNS-rebinding attacks against the local API.
-* **Origin checks** on every state-changing request, so other websites cannot
-  drive your dashboard.
-* **SSRF guard** — stream URLs must be http(s) and must not resolve to private,
-  loopback, link-local or reserved addresses. `localhost`, `10.x`, `192.168.x`,
-  `169.254.169.254`, `file://` and friends are rejected. (The built-in demo
-  bypasses this deliberately.)
-* **Path traversal** is blocked for clips, thumbnails, subtitles, preview
-  segments and static files.
-* **Request bodies capped at 64 KB**, slow connections dropped after 20s.
-* **Security headers**: strict CSP, `nosniff`, `X-Frame-Options: DENY`,
-  `no-referrer`, `Permissions-Policy`, `Cross-Origin-Opener-Policy`.
-* **`open folder`** only works from localhost — a remote session can't launch
-  Explorer on your machine.
+- password login (PBKDF2-SHA256, 200k rounds), HttpOnly + SameSite=Strict session
+  cookie, `Secure` under TLS
+- brute-force lockout: 8 failures per IP per 10 minutes → `429`
+- Host header validation (unknown hostnames → `421`) against DNS rebinding
+- Origin checks on every state-changing request
+- **SSRF guard**: stream URLs must be http(s) and must not resolve to private,
+  loopback, link-local or reserved addresses
+- path-traversal protection for clips, thumbs, subs, preview segments, static
+- 64 KB body cap, 20s idle timeout
+- strict CSP, `nosniff`, `X-Frame-Options: DENY`, `no-referrer`,
+  `Permissions-Policy`
+- **open folder** only works from localhost
 
-The whole thing is covered by an attack test suite:
+Attack test suite:
 
 ```powershell
-python tests/security_check.py
-# 36 checks: auth, CSRF, SSRF, traversal, brute force, headers, HTTPS...
+python tests\security_check.py
+# all 36 checks passed
 ```
 
-**Recommended for real internet exposure:** put a reverse proxy or tunnel in
-front (Caddy, nginx, Cloudflare Tunnel) so TLS and rate limiting are handled at
-the edge, and add your hostname with `--allowed-host`. Don't port-forward the
-plain HTTP port.
-
-## Auto captions
-
-Every clip is transcribed locally with [faster-whisper](https://github.com/SYSTRAN/faster-whisper)
-(Whisper on ctranslate2 — CPU is fine, no API key, no upload):
-
-* the clip window's audio is decoded, transcribed, split into short readable
-  cues (~42 characters per line, two lines max) and burned in bottom-centre
-  during the same encode pass — no extra re-encode, no quality loss
-* an `.srt` file is always written next to the `.mp4` for editing or re-upload
-* `--caption-mode srt` keeps the video clean and only writes subtitles
-* `--caption-box` draws captions on a solid background instead of an outline
-* the first run downloads the model once (~145 MB for `base`) into your
-  HuggingFace cache; later runs load it in a couple of seconds
-* `--caption-model tiny|base|small|medium` trades speed for accuracy
-* `--caption-lang en` skips language auto-detection (faster and more accurate
-  when you know the language)
-* with an NVIDIA GPU: `--caption-device cuda --caption-compute float16`
-* captions add a few seconds per clip — roughly 0.5× the clip length to
-  transcribe on CPU with `base` (a 30s clip ≈ 15s), plus the encode
-
-The dashboard has a **captions** switch, and clips with subtitles are tagged
-`CC`. Caption failures never lose a clip: it is still saved without them.
+**Recommended for internet exposure:** put Caddy, nginx or a Cloudflare Tunnel
+in front and bind to `127.0.0.1`, so TLS and rate limiting live at the edge.
+Don't port-forward plain HTTP.
 
 ---
 
-## Speed: hardware encoding
+## CLI reference
 
-Clip encoding uses the fastest encoder that actually works on your machine:
-NVENC (NVIDIA), Quick Sync (Intel), AMF (AMD), or libx264 as a last resort. The
-choice is verified with a real one-second test encode at startup, because ffmpeg
-often ships encoders the driver cannot run.
+### Source
 
-```
-[10:00:01]   encoder: h264_qsv (Intel Quick Sync) [hardware]
-```
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `url` | – | YouTube live/video URL, or a direct media URL with `--direct` |
+| `--test` | off | run the local demo stream instead of a URL |
+| `--check` | off | resolve the stream, print info, exit |
+| `--quality` | `1080` | max video height |
+| `--direct` | off | treat the URL as a direct `.m3u8`/media URL |
+| `--cookies-from-browser` | – | `chrome`, `edge`, `firefox`, … |
+| `--cookies` | – | path to `cookies.txt` |
+| `--refresh` | `3600` | re-resolve the stream URL after N seconds |
 
-Measured on a 1080x1920 clip: **11.6s with libx264 vs 6.9s with Quick Sync**
-(and 2.2 MB vs 2.9 MB at the same quality). On 1080p+ game footage the gap is
-usually 3–6×, and the CPU stays free for the recorder.
-
-Force one with `--encoder nvenc|qsv|amf|x264`.
-
-## Vertical clips (9:16)
-
-Every clip card has a **9:16** button. It renders `<clip>_vertical.mp4` at
-1080x1920 with the audio copied, no re-recording:
-
-* `--vertical-mode blur` (default) — full frame centred over a blurred fill of
-  itself. Nothing is cut, captions stay readable. Best for news/talking heads.
-* `--vertical-mode crop` — full-bleed centre crop. Fills the screen, but the
-  sides are gone, so burned-in captions can get clipped.
-
-Add `--vertical-auto` to render a vertical version of every clip automatically;
-otherwise it's one click per clip. Delete a clip and its vertical goes with it.
-
----
-
-## Options
+### Clip window
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `--before` | `18` | seconds kept before the moment |
 | `--after` | `12` | seconds kept after the moment |
 | `--buffer` | `420` | seconds of stream kept on disk |
-| `--seg-time` | `4` | segment length (lower = faster detection, more files) |
-| `--out` | `clips` | folder for finished clips |
-| `--no-auto` | off | start with auto detection disabled |
-| `--db-margin` | `8.5` | how many dB above baseline counts as "loud" |
-| `--floor-db` | `-34` | ignore anything quieter than this |
+| `--seg-time` | `4` | segment length (lower = faster detection) |
+| `--out` | `clips` | output folder |
+
+### Auto detection
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--no-auto` | off | start with auto clipping disabled |
+| `--db-margin` | `8.5` | loudness jump that counts as hype |
+| `--floor-db` | `-34` | ignore anything quieter |
 | `--cooldown` | `45` | min seconds between automatic clips |
-| `--max-per-hour` | `40` | hard cap on automatic clips |
-| `--no-chat` | off | disable live chat detection |
-| `--no-captions` | off | disable transcription entirely |
-| `--caption-model` | `base` | whisper model: `tiny`, `base`, `small`, `medium` |
-| `--caption-lang` | auto | force a language, e.g. `en` |
-| `--caption-mode` | `burn` | `burn` = subtitles inside the video, `srt` = file only |
-| `--caption-box` | off | solid caption background instead of an outline |
+| `--max-per-hour` | `40` | hard cap |
+| `--no-chat` | off | disable chat-spike detection |
+
+### Captions
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--no-captions` | off | disable transcription |
+| `--caption-model` | `base` | `tiny`, `base`, `small`, `medium` |
+| `--caption-lang` | auto | force a language |
+| `--caption-mode` | `burn` | `burn` into the video, or `srt` only |
+| `--caption-box` | off | solid caption background |
 | `--caption-device` / `--caption-compute` | `cpu` / `int8` | `cuda` + `float16` for a GPU |
-| `--encoder` | `auto` | `auto`, `nvenc`, `qsv`, `amf` or `x264` |
-| `--hotkey` | `F8` | system-wide clip hotkey (`F8`, `ctrl+alt+c`, …) |
-| `--no-hotkey` | off | don't register a global hotkey |
-| `--vertical-mode` | `blur` | 9:16 framing: `blur` or `crop` |
-| `--vertical-auto` | off | render 9:16 for every clip automatically |
-| `--no-preview` | off | disable the live preview panel |
-| `--password` | none | require a password (mandatory when binding publicly) |
-| `--generate-password` | off | generate and print a random password |
-| `--tls-cert` / `--tls-key` | none | serve HTTPS with a PEM certificate |
-| `--allowed-host` | none | extra hostname accepted in the Host header |
-| `--quality` | `1080` | max video height to download |
-| `--direct` | off | treat the URL as a direct `.m3u8`/media URL |
-| `--test` | off | run the local demo stream instead of a URL |
-| `--voice` | `kokoro` | demo voice: `kokoro`, `sapi` or `tone` |
-| `--voice-name` | `af_heart` | kokoro voice id |
-| `--voice-speed` | `1.0` | demo speech speed |
-| `--cookies-from-browser` | – | `chrome`, `firefox`, `edge`, … for restricted streams |
-| `--refresh` | `3600` | re-resolve the stream URL after N seconds |
-| `--port` / `--host` | `8765` / `127.0.0.1` | dashboard binding |
-| `--no-open` | off | don't open a browser window |
-| `--check` | off | resolve and print stream info, then exit |
 
-### Tuning auto detection
+### Output & UI
 
-* Too many clips → raise `--db-margin` (e.g. `12`) or `--cooldown` (e.g. `90`).
-* Missing moments → lower `--db-margin` (e.g. `6`), or lower `--floor-db`
-  (e.g. `-45`) if the stream is quiet.
-* Watch the **loudness meter**: the trigger line is where clips start firing.
-  If it sits above every peak, nothing will ever trigger.
-* `--seg-time 2` makes detection snappier; `6` makes it cheaper on a slow PC.
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--encoder` | `auto` | `nvenc`, `qsv`, `amf`, `x264` |
+| `--hotkey` / `--no-hotkey` | `F8` | system-wide clip hotkey |
+| `--vertical-mode` | `blur` | `blur` or `crop` |
+| `--vertical-auto` | off | 9:16 for every clip |
+| `--no-preview` | off | disable the live preview |
+| `--host` / `--port` | `127.0.0.1` / `8765` | dashboard binding |
+| `--no-open` | off | don't open a browser |
+| `--work-dir` | `.clipper` | buffer/scratch folder |
+| `--ffmpeg` | – | explicit ffmpeg path |
+
+### Security
+
+| Flag | Meaning |
+| --- | --- |
+| `--password` | require a password |
+| `--generate-password` | generate and print one |
+| `--tls-cert` / `--tls-key` | serve HTTPS |
+| `--allowed-host` | extra hostname allowed in the Host header |
+
+### Demo only
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--voice` | `kokoro` | `kokoro`, `sapi` or `tone` |
+| `--voice-name` | `af_heart` | e.g. `am_michael`, `bm_george` |
+| `--voice-speed` | `1.0` | speech speed |
 
 ---
 
 ## Troubleshooting
 
-**"yt-dlp could not read that URL"**
-Update it: `python -m pip install -U yt-dlp`. For members-only or
-age-restricted streams use `--cookies-from-browser chrome`.
+**yt-dlp could not read that URL**
+Update it: `python -m pip install -U yt-dlp`. For private streams use the
+cookies dropdown or `--cookies-from-browser chrome`.
 
-**The stream is 12 hours long and clips drift / stop**
-The URL is refreshed hourly by default. If the dashboard shows `waiting`,
-check the activity log — the recorder retries automatically.
+**`Could not copy Chrome cookie database`**
+Chrome is running and holding its cookie file. Close it, or use edge/firefox
+cookies.
 
-**Only 720p shows up**
-YouTube often serves a lower HLS ladder to non-browser clients. Try
-`--quality 1080` (default) and `--cookies-from-browser chrome` so yt-dlp can
-request the higher formats.
+**Only 720p available**
+YouTube serves a lower ladder to non-browser clients. Try
+`--cookies-from-browser chrome` so yt-dlp can request the higher formats.
 
-**Clips are "truncated"**
-The buffer did not cover the requested window (usually right after start or
-after a reconnect). Increase `--buffer`, or wait a minute after launching.
+**Clips say "truncated"**
+The buffer did not cover the requested window (right after start or after a
+reconnect). Increase `--buffer` or wait a minute.
 
-**High CPU during encoding**
-Clips are re-encoded with `libx264 veryfast`. Raise `--cooldown` so fewer clips
-are cut, or edit the encoder settings in `ytclipper/clips.py`.
+**High CPU while clipping**
+Caps are re-encoded for frame accuracy. Use hardware encoding (default), raise
+`--cooldown`, or lower `--caption-model` to `tiny`.
 
-**The dashboard says "no stream yet"**
-Paste a URL in the bar at the top and press **watch** (or Enter). Nothing is
-recording until you do.
+**Dashboard asks for a password**
+Only when you started with `--password`, `--generate-password`, or a non-local
+`--host`. There is no default password; restart with a new one if you lost it.
 
-**"Could not copy Chrome cookie database"**
-Chrome was running and holding its cookie file. Close Chrome (or pick another
-browser in the cookies dropdown) and press **watch** again.
+**Dashboard says "no stream yet"**
+Paste a URL in the bar and press watch. Nothing records until you do.
 
-**Chat detection is off**
-`python -m pip install chat-downloader`. It is optional and reconnects on its
-own when chat drops.
-
-**Captions are missing**
-`python -m pip install faster-whisper`. If it is installed but the model is
-still downloading, watch the activity log — the first clip waits for it.
-
-**Captions come out garbled or in the wrong language**
-Force the language (`--caption-lang en`) or use a bigger model
-(`--caption-model small`). `medium` is slower but noticeably better on noisy
-streams.
-
-**The first caption takes a long time**
-That is the one-time model download. Later clips reuse it.
+**Live preview is black**
+Give it a few seconds (`connecting…`), then check the activity log. If it says
+`preview unavailable`, the source may use a codec that needs the transcode
+fallback.
 
 ---
 
-## Notes
-
-* Respect the platform's terms of service and the streamer's rights when you
-  publish clips. This tool records content you choose to point it at.
-* Clip files live entirely on your disk; nothing leaves the machine.
-* `--host 0.0.0.0` exposes the dashboard to your network. Keep the default
-  `127.0.0.1` unless you know what you are doing — there is no login.
-
-## Layout
+## Project layout
 
 ```
 clipper.py              entry point / CLI
-ytclipper/config.py     runtime config
-ytclipper/resolve.py    URL -> direct stream URLs (yt-dlp)
-ytclipper/recorder.py   ffmpeg segment recorder + supervisor
-ytclipper/buffer.py     segment index & stream timeline
-ytclipper/detector.py   audio + chat hype detection
-ytclipper/captions.py   whisper transcription, cues, .srt / burned subtitles
-ytclipper/encode.py     hardware encoder detection (nvenc / qsv / amf / x264)
-ytclipper/hotkey.py     system-wide clip hotkey
-ytclipper/preview.py    local HLS re-stream for the live preview
-ytclipper/security.py   password auth, SSRF guard, session/cookie helpers
-ytclipper/clips.py      clip cutting / encoding / thumbnails / 9:16 export
-tests/security_check.py attack suite for the dashboard
-ytclipper/engine.py     wiring, triggers, state for the UI
-ytclipper/web.py        local dashboard server + JSON API
-static/                 dashboard (HTML/CSS/JS)
+run.bat / demo.bat      double-click launchers
+
+ytclipper/
+  config.py             runtime configuration
+  resolve.py            URL -> direct media URLs (yt-dlp)
+  recorder.py           ffmpeg segment recorder + supervisor
+  buffer.py             segment index and stream timeline
+  detector.py           audio + chat hype detection
+  captions.py           whisper transcription, cues, .srt / burned subtitles
+  encode.py             hardware encoder detection
+  preview.py            local HLS re-stream for the live preview
+  clips.py              clip cutting, encoding, thumbnails, 9:16 export
+  security.py           password auth, SSRF guard, sessions
+  engine.py             wiring, triggers, state for the UI
+  web.py                dashboard server + JSON API
+  demo.py / voice.py    synthetic test stream and its TTS
+  hotkey.py             system-wide clip hotkey
+  util.py               shared helpers
+
+static/                 dashboard (HTML/CSS/JS + hls.js)
+tests/security_check.py attack suite
 ```
+
+Generated at runtime (git-ignored): `.clipper\` (buffer), `clips\`, `.models\`.
+
+---
+
+## Limits
+
+- **No auto-publish.** Clips are saved locally; uploading to YouTube/TikTok is
+  not included.
+- **Detection is signal-based.** It clips loud moments and chat spikes, not
+  "interesting" content it understands.
+- **Vertical export reframes the finished clip.** Burned captions stay inside
+  the original 16:9 frame, so they look smaller in blur mode.
+- **Normal videos play in real time.** No seeking, no fast scan.
+- **One stream at a time.**
+- **Check the rights** of whatever you clip before publishing it.
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE).
