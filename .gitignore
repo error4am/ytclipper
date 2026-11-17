@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.clipper/
+.models/
+clips/
+*.mp4
+*.mkv

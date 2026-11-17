@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ytclipper</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='%23b6ff3b'/%3E%3Crect x='12' y='10' width='3' height='12' fill='%230b0d10'/%3E%3Crect x='18' y='10' width='3' height='12' fill='%230b0d10'/%3E%3C/svg%3E">
+</head>
+<body>
+<div class="app">
+
+  <header class="top">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" aria-hidden="true">
+        <circle cx="16" cy="16" r="13" fill="none" stroke="currentColor" stroke-width="2"/>
+        <rect x="12" y="10" width="3" height="12" fill="currentColor"/>
+        <rect x="18" y="10" width="3" height="12" fill="currentColor"/>
+      </svg>
+      <span>yt<em>clipper</em></span>
+    </div>
+
+    <div class="stream">
+      <span class="live-dot" id="live-dot"></span>
+      <div class="stream-text">
+        <div class="stream-title" id="stream-title">connecting…</div>
+        <div class="stream-sub" id="stream-sub">looking for the stream</div>
+      </div>
+    </div>
+
+    <div class="stats">
+      <div class="stat"><span class="k">uptime</span><span class="v" id="stat-uptime">0:00</span></div>
+      <div class="stat"><span class="k">buffer</span><span class="v" id="stat-buffer">0:00</span></div>
+      <div class="stat"><span class="k">clips</span><span class="v" id="stat-clips">0</span></div>
+    </div>
+    <button id="logout-btn" class="ghost small" hidden>sign out</button>
+  </header>
+
+  <section class="panel urlbar">
+    <div class="url-input-wrap">
+      <svg class="url-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/>
+        <path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>
+      </svg>
+      <input id="url-input" type="url" spellcheck="false" autocomplete="off"
+             placeholder="Paste a YouTube live URL (or any .m3u8) and hit watch">
+    </div>
+    <select id="cookies-select" class="cookies"
+            title="Use your browser's cookies for members-only or age-restricted streams (close the browser if it fails)">
+      <option value="">no cookies</option>
+      <option value="chrome">chrome cookies</option>
+      <option value="edge">edge cookies</option>
+      <option value="firefox">firefox cookies</option>
+      <option value="brave">brave cookies</option>
+      <option value="opera">opera cookies</option>
+      <option value="vivaldi">vivaldi cookies</option>
+      <option value="chromium">chromium cookies</option>
+    </select>
+    <button id="url-start" class="go">watch</button>
+    <button id="url-stop" class="ghost" hidden>stop</button>
+    <button id="url-demo" class="ghost" title="start a local synthetic stream for testing">demo</button>
+  </section>
+
+  <main>
+    <section class="panel livepanel">
+      <div class="panel-head">
+        <h2>live</h2>
+        <div class="live-status">
+          <span class="live-tag" id="live-tag">offline</span>
+          <button id="live-mute" class="ghost small" title="enable sound">unmute</button>
+        </div>
+      </div>
+      <div class="live-frame">
+        <video id="live-video" muted playsinline></video>
+        <div class="live-overlay" id="live-overlay">no stream</div>
+      </div>
+    </section>
+
+    <section class="panel control">
+      <div class="panel-head">
+        <h2>clip something</h2>
+        <div class="switches">
+          <label class="switch" title="cut clips automatically on loud moments and chat spikes">
+            <input type="checkbox" id="auto-toggle" checked>
+            <span class="track"><span class="thumb"></span></span>
+            <span class="switch-label">auto detect</span>
+          </label>
+          <label class="switch" id="captions-switch" title="burn auto captions into clips">
+            <input type="checkbox" id="captions-toggle" checked>
+            <span class="track"><span class="thumb"></span></span>
+            <span class="switch-label">captions</span>
+          </label>
+        </div>
+      </div>
+
+      <button id="clip-btn" class="clip-btn" title="Save a clip around right now (space)">
+        <span class="clip-rec"></span>
+        <span class="clip-label">CLIP THAT</span>
+        <span class="clip-hint">space</span>
+      </button>
+
+      <div class="clip-note" id="clip-note">saves 18s before + 12s after the moment</div>
+
+      <div class="window">
+        <label>before
+          <span class="num"><input id="before" type="number" min="1" max="120" step="1" value="18"><span>s</span></span>
+        </label>
+        <label>after
+          <span class="num"><input id="after" type="number" min="0" max="120" step="1" value="12"><span>s</span></span>
+        </label>
+        <button id="reveal-btn" class="ghost">open folder</button>
+      </div>
+
+      <div class="build-line" id="build-line"></div>
+
+      <div class="meter">
+        <div class="meter-head"><span>room loudness</span><span id="meter-db">—</span></div>
+        <div class="meter-track">
+          <div class="meter-fill" id="meter-fill"></div>
+          <div class="meter-base" id="meter-base"></div>
+          <div class="meter-trig" id="meter-trig"></div>
+        </div>
+        <div class="meter-foot">
+          <span id="meter-note">warming up…</span>
+          <span id="chat-note" class="muted"></span>
+        </div>
+      </div>
+    </section>
+
+    <aside class="panel logpanel">
+      <div class="panel-head">
+        <h2>activity</h2>
+        <span class="muted small" id="worker-note"></span>
+      </div>
+      <div class="log" id="log"></div>
+    </aside>
+
+    <section class="clips-section">
+      <div class="panel-head">
+        <h2>clips <span class="count" id="clip-count">0</span></h2>
+        <div class="head-actions">
+          <span class="muted small" id="clips-dir"></span>
+          <button class="ghost small" id="refresh-btn">refresh</button>
+        </div>
+      </div>
+      <div class="clips" id="clips"></div>
+      <div class="empty" id="empty">
+        <p>No clips yet.</p>
+        <p class="muted">Hit the button, press space, or wait for a loud moment.</p>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div class="toasts" id="toasts"></div>
+
+<div class="modal" id="modal" hidden>
+  <div class="modal-body">
+    <video id="player" controls playsinline></video>
+    <div class="modal-bar">
+      <span id="modal-title"></span>
+      <div class="modal-actions">
+        <a id="modal-download" class="ghost small" download>download</a>
+        <button class="ghost small" id="modal-close">close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/static/hls.min.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
